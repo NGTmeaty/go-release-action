@@ -117,36 +117,121 @@ outputs:
     description: 'Release file directory provided for use by other workflows'
 
 runs:
-  using: 'docker'
-  image: 'Dockerfile'
-  args:
-    - ${{ inputs.github_token }}
-    - ${{ inputs.goos }}
-    - ${{ inputs.goarch }}
-    - ${{ inputs.goamd64 }}
-    - ${{ inputs.goarm }}    
-    - ${{ inputs.gomips }}    
-    - ${{ inputs.goversion }}
-    - ${{ inputs.build_flags}}
-    - ${{ inputs.ldflags }}
-    - ${{ inputs.project_path }}
-    - ${{ inputs.binary_name }}
-    - ${{ inputs.pre_command }}
-    - ${{ inputs.build_command }}
-    - ${{ inputs.executable_compression }}
-    - ${{ inputs.extra_files }}
-    - ${{ inputs.md5sum }}
-    - ${{ inputs.sha256sum }}
-    - ${{ inputs.release_tag }}
-    - ${{ inputs.release_name }}
-    - ${{ inputs.release_repo }}
-    - ${{ inputs.overwrite }}
-    - ${{ inputs.asset_name }}
-    - ${{ inputs.retry }}
-    - ${{ inputs.post_command }}
-    - ${{ inputs.compress_assets }}
-    - ${{ inputs.upload }}
-    - ${{ inputs.multi_binaries }}
+  using: 'composite'
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ (inputs.goversion != '' && endsWith(inputs.goversion, 'go.mod')) && inputs.goversion || '' }}
+        go-version: ${{ (inputs.goversion == '' || endsWith(inputs.goversion, 'go.mod')) && 'stable' || inputs.goversion }}
+        
+    - name: Install UPX
+      if: ${{ inputs.executable_compression != '' }}
+      shell: bash
+      run: |
+        if [[ "${{ inputs.executable_compression }}" =~ ^upx.* ]]; then
+          UPX_VER="${UPX_VER:-4.0.0}"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            export arch=$(dpkg --print-architecture)
+            wget --no-check-certificate --progress=dot:mega https://github.com/upx/upx/releases/download/v${UPX_VER}/upx-${UPX_VER}-${arch}_linux.tar.xz
+            tar -Jxf upx-${UPX_VER}-${arch}_linux.tar.xz
+            sudo mv upx-${UPX_VER}-${arch}_linux /usr/local/
+            sudo ln -sf /usr/local/upx-${UPX_VER}-${arch}_linux/upx /usr/local/bin/upx
+            rm upx-${UPX_VER}-${arch}_linux.tar.xz
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install upx
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            choco install upx
+          fi
+          upx --version
+        fi
+      env:
+        UPX_VER: 4.0.0
+
+    - name: Install GitHub Assets Uploader
+      shell: bash
+      run: |
+        UPLOADER_VER="${UPLOADER_VER:-v0.13.0}"
+        if [[ "$RUNNER_OS" == "Linux" ]]; then
+          export arch=$(dpkg --print-architecture)
+          wget --no-check-certificate --progress=dot:mega https://github.com/wangyoucao577/assets-uploader/releases/download/${UPLOADER_VER}/github-assets-uploader-${UPLOADER_VER}-linux-${arch}.tar.gz -O github-assets-uploader.tar.gz
+          tar -zxf github-assets-uploader.tar.gz
+          sudo mv github-assets-uploader /usr/local/bin/
+          rm -f github-assets-uploader.tar.gz
+        elif [[ "$RUNNER_OS" == "macOS" ]]; then
+          arch="amd64"
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            arch="arm64"
+          fi
+          wget --no-check-certificate --progress=dot:mega https://github.com/wangyoucao577/assets-uploader/releases/download/${UPLOADER_VER}/github-assets-uploader-${UPLOADER_VER}-darwin-${arch}.tar.gz -O github-assets-uploader.tar.gz
+          tar -zxf github-assets-uploader.tar.gz
+          sudo mv github-assets-uploader /usr/local/bin/
+          rm -f github-assets-uploader.tar.gz
+        elif [[ "$RUNNER_OS" == "Windows" ]]; then
+          curl -L https://github.com/wangyoucao577/assets-uploader/releases/download/${UPLOADER_VER}/github-assets-uploader-${UPLOADER_VER}-windows-amd64.zip -o github-assets-uploader.zip
+          unzip github-assets-uploader.zip
+          mkdir -p /usr/bin 2>/dev/null || true
+          mv github-assets-uploader.exe /usr/bin/ 2>/dev/null || mv github-assets-uploader.exe /c/Windows/System32/ 2>/dev/null || echo "github-assets-uploader.exe" >> $GITHUB_PATH
+          rm -f github-assets-uploader.zip
+        fi
+        github-assets-uploader -version
+      env:
+        UPLOADER_VER: v0.13.0
+
+    - name: Build and Release
+      shell: bash
+      run: |
+        # Debug: Print Go version and environment
+        echo "=== Go Version and Environment ==="
+        go version
+        echo ""
+        echo "=== Environment Variables ==="
+        env | sort
+        echo ""
+        
+        # Make release script executable
+        chmod +x "${{ github.action_path }}/release.sh"
+        
+        # Handle pre_command properly if it contains multiple lines
+        PRE_CMD='${{ inputs.pre_command }}'
+        if [ ! -z "$PRE_CMD" ]; then
+          echo "=== Executing Pre-Command ==="
+          eval "$PRE_CMD"
+          echo "=== Pre-Command Completed ==="
+          echo ""
+        fi
+        
+        # Set environment variables from inputs
+        export INPUT_GITHUB_TOKEN="${{ inputs.github_token }}"
+        export INPUT_GOOS="${{ inputs.goos }}"
+        export INPUT_GOARCH="${{ inputs.goarch }}"
+        export INPUT_GOAMD64="${{ inputs.goamd64 }}"
+        export INPUT_GOARM="${{ inputs.goarm }}"
+        export INPUT_GOMIPS="${{ inputs.gomips }}"
+        export INPUT_GOVERSION="${{ inputs.goversion }}"
+        export INPUT_BUILD_FLAGS="${{ inputs.build_flags }}"
+        export INPUT_LDFLAGS="${{ inputs.ldflags }}"
+        export INPUT_PROJECT_PATH="${{ inputs.project_path }}"
+        export INPUT_BINARY_NAME="${{ inputs.binary_name }}"
+        export INPUT_PRE_COMMAND=""  # Clear this since we handled it above
+        export INPUT_BUILD_COMMAND="${{ inputs.build_command }}"
+        export INPUT_EXECUTABLE_COMPRESSION="${{ inputs.executable_compression }}"
+        export INPUT_EXTRA_FILES="${{ inputs.extra_files }}"
+        export INPUT_MD5SUM="${{ inputs.md5sum }}"
+        export INPUT_SHA256SUM="${{ inputs.sha256sum }}"
+        export INPUT_RELEASE_TAG="${{ inputs.release_tag }}"
+        export INPUT_RELEASE_NAME="${{ inputs.release_name }}"
+        export INPUT_RELEASE_REPO="${{ inputs.release_repo }}"
+        export INPUT_OVERWRITE="${{ inputs.overwrite }}"
+        export INPUT_ASSET_NAME="${{ inputs.asset_name }}"
+        export INPUT_RETRY="${{ inputs.retry }}"
+        export INPUT_POST_COMMAND="${{ inputs.post_command }}"
+        export INPUT_COMPRESS_ASSETS="${{ inputs.compress_assets }}"
+        export INPUT_UPLOAD="${{ inputs.upload }}"
+        export INPUT_MULTI_BINARIES="${{ inputs.multi_binaries }}"
+        
+        # Run the release script
+        "${{ github.action_path }}/release.sh"
 
 branding:
   icon: 'package'
