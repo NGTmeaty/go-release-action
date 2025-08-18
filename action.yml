@@ -119,11 +119,17 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Setup Go
+    - name: Setup Go (with version file)
       uses: actions/setup-go@v5
       with:
-        go-version-file: ${{ (inputs.goversion != '' && endsWith(inputs.goversion, 'go.mod')) && inputs.goversion || '' }}
-        go-version: ${{ (inputs.goversion == '' || endsWith(inputs.goversion, 'go.mod')) && 'stable' || inputs.goversion }}
+        go-version-file: ${{ inputs.goversion }}
+      if: ${{ inputs.goversion != '' && endsWith(inputs.goversion, 'go.mod') }}
+        
+    - name: Setup Go (with version)
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.goversion == '' && 'stable' || inputs.goversion }}
+      if: ${{ inputs.goversion == '' || !endsWith(inputs.goversion, 'go.mod') }}
         
     - name: Install UPX
       if: ${{ inputs.executable_compression != '' }}
